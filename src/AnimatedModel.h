@@ -87,7 +87,7 @@ struct ModelFile
 {
 	struct Header
 	{
-		std::uint32_t magic_number = 'ldom';
+		std::uint32_t magic_number;
 		std::uint32_t num_meshes;
 		std::uint32_t num_vertices;
 		std::uint32_t num_indices;
@@ -107,7 +107,7 @@ struct SkeletonFile
 {
 	struct Header
 	{
-		std::uint32_t magic_number = 'ntks';
+		std::uint32_t magic_number;
 		std::uint32_t num_joints;
 	};
 	Header header;
@@ -120,7 +120,7 @@ struct AnimationClipFile
 	struct Header
 	{
 		using bool32 = std::uint32_t; // for padding purposes
-		std::uint32_t magic_number = 'pilc';
+		std::uint32_t magic_number;
 		std::uint32_t frame_count;
 		float frames_per_second;
 		bool32 loops = false; // fix later
@@ -138,7 +138,7 @@ struct AnimatedModel
 	Skeleton skeleton;
 	AnimationClip clip;
 	AnimatedModel(const std::string& path);
-	void Draw(Shader& shader, float dt);
+	void Draw(Shader& shader, int pose_index);
 private:
 	void LoadAnimatedModel(const std::string& path);
 	float time = 0.0f;

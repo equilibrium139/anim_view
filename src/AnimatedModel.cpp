@@ -62,14 +62,9 @@ static SkeletonPose Interpolate(const SkeletonPose& a, const SkeletonPose& b, fl
 	return interpolated;
 }
 
-void AnimatedModel::Draw(Shader& shader, float dt)
+void AnimatedModel::Draw(Shader& shader, int pose_index)
 {
-	time += dt;
-	float clip_duration = clip.frame_count / clip.frames_per_second;
-	float pose_index = std::fmod(time, clip_duration) * clip.frames_per_second;
-	auto a = std::floor(pose_index);
-	auto b = a + 1;
-	auto pose = Interpolate(clip.poses[a], clip.poses[b], pose_index - a);
+	auto pose = clip.poses[pose_index];
 
 	glm::mat4 local_mat = glm::identity<glm::mat4>();
 	local_mat = glm::translate(local_mat, pose.joint_poses[0].translation);
