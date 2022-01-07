@@ -21,6 +21,7 @@ public:
 
 	void SetBool(const char* name, bool value) const;
 	void SetInt(const char* name, int value) const;
+	void SetUint(const char* name, std::uint32_t value) const;
 	void SetFloat(const char* name, float value) const;
 	void SetMat4(const char* name, const float* value);
 	void SetVec3(const char* name, float x, float y, float z);

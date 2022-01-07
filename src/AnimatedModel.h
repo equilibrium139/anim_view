@@ -1,23 +1,13 @@
 #ifndef ANIMATED_MODEL_H
 #define ANIMATED_MODEL_H
 
+#include <array>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include "Material.h"
 #include "Shader.h"
 #include <string>
 #include <memory>
-
-struct SkinnedVertex
-{
-	glm::vec3 position;
-	glm::vec3 normal;
-	glm::vec2 tex_coords;
-	glm::u8vec4 joint_indices;
-	glm::vec4 joint_weights;
-	glm::vec3 tangent;
-	glm::vec3 bitangent;
-};
 
 struct Mesh
 {
@@ -54,6 +44,7 @@ struct AnimationClip
 {
 	//Skeleton* skeleton;
 	std::vector<SkeletonPose> poses;
+	std::string name;
 	float frames_per_second;
 	unsigned int frame_count;
 	bool loops;
@@ -136,12 +127,17 @@ struct AnimatedModel
 	std::vector<Mesh> meshes;
 	std::vector<PhongMaterial> materials;
 	Skeleton skeleton;
-	AnimationClip clip;
-	AnimatedModel(const std::string& path);
-	void Draw(Shader& shader, int pose_index);
+	std::vector<AnimationClip> clips;
+	int current_clip = 0;
+	AnimationClip& CurrentClip() { return clips[current_clip]; }
+	AnimatedModel(const std::string& directory);
+	void Draw(Shader& shader, float dt);
+	float clip_speed = 1.0f;
+	float clip_time = 0.0f;
+	bool paused = false;
+	bool apply_root_motion = true;
 private:
 	void LoadAnimatedModel(const std::string& path);
-	float time = 0.0f;
 	unsigned int VAO, VBO, EBO;
 };
 

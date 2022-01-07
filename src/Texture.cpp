@@ -46,7 +46,6 @@ static unsigned int TextureFromFile(const char* path)
 	return id;
 }
 
-
 static unsigned int TextureFromMemory(unsigned char* buffer, int length)
 {
 	int width, height, nrComponents;
@@ -109,6 +108,35 @@ unsigned int LoadTexture(unsigned char* buffer, int length, const std::string& i
 	}
 	unsigned int id = TextureFromMemory(buffer, length);
 	textures[identifier] = id;
+	return id;
+}
+
+unsigned int White1x1Texture()
+{
+	const char* name = "White1x1Texture";
+	auto iter = textures.find(name);
+	if (iter != textures.end()) return iter->second;
+	GLuint id;
+	glGenTextures(1, &id);
+	glBindTexture(GL_TEXTURE_2D, id);
+	GLubyte data[3] = { 255, 255, 255 };
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+	textures[name] = id;
+	return id;
+}
+
+
+unsigned int Blue1x1Texture()
+{
+	const char* name = "Blue1x1Texture";
+	auto iter = textures.find(name);
+	if (iter != textures.end()) return iter->second;
+	GLuint id;
+	glGenTextures(1, &id);
+	glBindTexture(GL_TEXTURE_2D, id);
+	GLubyte data[3] = { 0, 0, 255 };
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+	textures[name] = id;
 	return id;
 }
 

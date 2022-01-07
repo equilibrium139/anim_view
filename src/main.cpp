@@ -9,6 +9,7 @@
 #include "imgui_impl_opengl3.h"
 #include <GLFW/glfw3.h> // Will drag system OpenGL headers
 #include <iostream>
+#include <memory>
 #include "AnimatedModel.h"
 #include "Camera.h"
 #include "Light.h"
@@ -61,6 +62,8 @@ int main(int, char**)
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     GLuint projViewUBO, lightsUBO;
     constexpr int maxPointLights = 25;
@@ -93,8 +96,8 @@ int main(int, char**)
 
     // Our state
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
-    AnimatedModel warrok("Models/Warrok2/Warrok.model");
-    Camera camera({ 0.0f, 1.5f, 3.0f });
+    AnimatedModel warrok("Models/Warrok2");
+    Camera camera({ 0.0f, 1.5f, 5.0f });
 
     Shader shader("Shaders/anim.vert", "Shaders/anim.frag");
     shader.use();
@@ -103,9 +106,16 @@ int main(int, char**)
     GLuint shaderLightsBlockIndex = glGetUniformBlockIndex(shader.id, "Lights");
     glUniformBlockBinding(shader.id, shaderLightsBlockIndex, 1);
 
+    float deltaTime = 0.0f;
+    float lastFrameTime = 0.0f;
+
     // Main loop
     while (!glfwWindowShouldClose(window))
     {
+        float currentTime = glfwGetTime();
+        deltaTime = currentTime - lastFrameTime;
+        lastFrameTime = currentTime;
+
         // Poll and handle events (inputs, window resize, etc.)
         // You can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags to tell if dear imgui wants to use your inputs.
         // - When io.WantCaptureMouse is true, do not dispatch mouse input data to your main application.
@@ -118,16 +128,53 @@ int main(int, char**)
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        static int pose = 0;
+        static float model_y = 0.0f;
         {
+            static ImGuiComboFlags flags = 0;
             static float f = 0.0f;
             static int counter = 0;
 
             ImGui::Begin("Animation Select");
-            
-            ImGui::InputInt("Pose (0 to 250)", &pose);
-            if (pose < 0) pose = 250;
-            if (pose > 250) pose = 0;
+
+            const int num_animations = (int)warrok.clips.size();
+            auto animation_names = std::make_unique<const char* []>(num_animations);
+            for (int i = 0; i < num_animations; i++) animation_names[i] = warrok.clips[i].name.c_str();
+            static int current_animation_idx = 0; // Here we store our selection data as an index.
+            const char* combo_preview_value = animation_names[current_animation_idx];  // Pass in the preview value visible before opening the combo (it could be anything)
+            if (ImGui::BeginCombo("Animation", combo_preview_value, flags))
+            {
+                for (int n = 0; n < num_animations; n++)
+                {
+                    const bool is_selected = (current_animation_idx == n);
+                    if (ImGui::Selectable(animation_names[n], is_selected))
+                    {
+                        if (current_animation_idx != n)
+                        {
+                            warrok.current_clip = n;
+                            warrok.clip_time = 0.0f;
+                        }
+                        current_animation_idx = n;
+                    }
+
+                    // Set the initial focus when opening the combo (scrolling + keyboard navigation focus)
+                    if (is_selected)
+                    {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::Checkbox("Pause", &warrok.paused);
+            ImGui::InputFloat("Speed", &warrok.clip_speed, 0.1f);
+            ImGui::Text("Clip time: %f", warrok.clip_time);
+            auto& clip = warrok.CurrentClip();
+            if (ImGui::SliderFloat("Clip time", &warrok.clip_time, 0.0f, clip.frame_count / clip.frames_per_second))
+            {
+                warrok.paused = true;
+            }
+            ImGui::ProgressBar(warrok.clip_time / (clip.frame_count / clip.frames_per_second));
+            ImGui::InputFloat("Model y", &model_y);
+            ImGui::Checkbox("Apply root motion", &warrok.apply_root_motion);
 
             ImGui::End();
         }
@@ -143,7 +190,7 @@ int main(int, char**)
             glm::value_ptr(view));
 
         glm::mat4 model = glm::identity<glm::mat4>();
-        model = glm::translate(model, glm::vec3(0, 1.0, 0));
+        model = glm::translate(model, glm::vec3(0, 0, model_y));
         model = glm::scale(model, glm::vec3(0.01f, 0.01f, 0.01f));
         glm::mat3 normalMatrix = glm::transpose(glm::inverse(view * model));
         shader.SetMat4("model", glm::value_ptr(model));
@@ -163,8 +210,7 @@ int main(int, char**)
         glClearColor(clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-
-        warrok.Draw(shader, pose);
+        warrok.Draw(shader, deltaTime);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(window);

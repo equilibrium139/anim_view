@@ -2,42 +2,15 @@
 
 #include <algorithm>
 #include <cassert>
+#include <filesystem>
 #include <iostream>
 #include <utility>
 #include <glm/glm.hpp>
 #include "stb_image.h"
 
-AnimatedModel::AnimatedModel(const std::string& path)
+AnimatedModel::AnimatedModel(const std::string& directory)
 {
-	LoadAnimatedModel(path);
-}
-
-// TODO: remove, probably not needed
-static glm::mat4 ToMat4(glm::mat4x3& mat)
-{
-	glm::mat4 mat4;
-
-	mat4[0][0] = mat[0][0];
-	mat4[0][1] = mat[0][1];
-	mat4[0][2] = mat[0][2];
-	mat4[0][3] = 0.0f;
-
-	mat4[1][0] = mat[1][0];
-	mat4[1][1] = mat[1][1];
-	mat4[1][2] = mat[1][2];
-	mat4[1][3] = 0.0f;
-
-	mat4[2][0] = mat[2][0];
-	mat4[2][1] = mat[2][1];
-	mat4[2][2] = mat[2][2];
-	mat4[2][3] = 0.0f;
-
-	mat4[3][0] = mat[3][0];
-	mat4[3][1] = mat[3][1];
-	mat4[3][2] = mat[3][2];
-	mat4[3][3] = 1.0f;
-
-	return mat4;
+	LoadAnimatedModel(directory);
 }
 
 static inline glm::vec3 Lerp(const glm::vec3& a, const glm::vec3& b, float t)
@@ -57,19 +30,31 @@ static SkeletonPose Interpolate(const SkeletonPose& a, const SkeletonPose& b, fl
 		auto& interpolated_joint_pose = interpolated.joint_poses[i];
 		interpolated_joint_pose.translation = Lerp(a_pose.translation, b_pose.translation, t);
 		interpolated_joint_pose.scale = Lerp(a_pose.scale, b_pose.scale, t);
-		interpolated_joint_pose.rotation = glm::lerp(a_pose.rotation, b_pose.rotation, t);
+		// Some animations have weird stutters with quaternion lerp (Warrok wave dance for example)
+		interpolated_joint_pose.rotation = glm::slerp(a_pose.rotation, b_pose.rotation, t);
 	}
 	return interpolated;
 }
 
-void AnimatedModel::Draw(Shader& shader, int pose_index)
+void AnimatedModel::Draw(Shader& shader, float dt)
 {
-	auto pose = clip.poses[pose_index];
+	if (!paused) clip_time += (dt * clip_speed);
+	auto clip = &clips[current_clip];
+	const float clip_duration = clip->frame_count / clip->frames_per_second;
+	clip_time = std::fmod(clip_time, clip_duration);
+	if (clip_time < 0) clip_time = clip_duration + clip_time;
+	//if (clip_time < 0) clip_time = clip_duration + clip_time;
+	float pose_index = clip_time * clip->frames_per_second;
+	auto a = std::floor(pose_index);
+	auto b = a + 1;
+	auto pose = Interpolate(clip->poses[a], clip->poses[b], pose_index - a);
+	//auto& pose = clip.poses[pose_index];
 
 	glm::mat4 local_mat = glm::identity<glm::mat4>();
-	local_mat = glm::translate(local_mat, pose.joint_poses[0].translation);
+	if (apply_root_motion) local_mat = glm::translate(local_mat, pose.joint_poses[0].translation);
 	local_mat *= glm::mat4_cast(pose.joint_poses[0].rotation);
 	local_mat = glm::scale(local_mat, pose.joint_poses[0].scale);
+
 	std::vector<glm::mat4> global_joint_poses(pose.joint_poses.size());
 	global_joint_poses[0] = local_mat;
 
@@ -78,23 +63,31 @@ void AnimatedModel::Draw(Shader& shader, int pose_index)
 		auto& joint = skeleton.joints[i];
 		auto& parent_global = global_joint_poses[joint.parent];
 
-		glm::mat4 local_matty = glm::identity<glm::mat4>();
-		local_matty = glm::translate(local_matty, pose.joint_poses[i].translation);
-		local_matty *= glm::mat4_cast(pose.joint_poses[i].rotation);
-		local_matty = glm::scale(local_matty, pose.joint_poses[i].scale);
-		global_joint_poses[i] = parent_global * local_matty;
+		local_mat = glm::identity<glm::mat4>();
+		local_mat = glm::translate(local_mat, pose.joint_poses[i].translation);
+		local_mat *= glm::mat4_cast(pose.joint_poses[i].rotation);
+		local_mat = glm::scale(local_mat, pose.joint_poses[i].scale);
+		global_joint_poses[i] = parent_global * local_mat;
 	}
 	
 	std::vector<glm::mat4> skinning_matrices(global_joint_poses.size());
 	for (int i = 0; i < global_joint_poses.size(); i++)
 	{
-		skinning_matrices[i] = global_joint_poses[i] * ToMat4(skeleton.joints[i].local_to_joint);
+		skinning_matrices[i] = global_joint_poses[i] * glm::mat4(skeleton.joints[i].local_to_joint);
 	}
 
 	shader.use();
 	glUniformMatrix4fv(glGetUniformLocation(shader.id, "skinning_matrices"), (GLsizei)skinning_matrices.size(), GL_FALSE, glm::value_ptr(skinning_matrices[0]));
 
 	glBindVertexArray(VAO);
+
+	// Render opaque meshes before transparent ones
+	std::partition(meshes.begin(), meshes.end(),
+		[&materials = this->materials](const Mesh& mesh)
+		{
+			auto& material = materials[mesh.material_index];
+			return !material.HasFlag(PhongMaterialFlags::DIFFUSE_WITH_ALPHA);
+		});
 
 	for (auto& mesh : meshes)
 	{
@@ -111,15 +104,66 @@ void AnimatedModel::Draw(Shader& shader, int pose_index)
 		shader.SetFloat("material.shininess", material.shininess);
 		shader.SetVec3("material.diffuse_coeff", material.diffuse_coefficient);
 		shader.SetVec3("material.specular_coeff", material.specular_coefficient);
-		glDrawElements(GL_TRIANGLES, mesh.indices_end - mesh.indices_begin + 1, GL_UNSIGNED_INT, 0);
+		static_assert(std::is_same_v<std::uint32_t, std::underlying_type<PhongMaterialFlags>::type>);
+		shader.SetUint("material.flags", (std::uint32_t)material.flags);
+		glDrawElements(GL_TRIANGLES, mesh.indices_end - mesh.indices_begin + 1, GL_UNSIGNED_INT, (void*)(mesh.indices_begin * sizeof(GLuint)));
+	}
+
+	for (auto& mesh : meshes)
+	{
+		auto& material = materials[mesh.material_index];
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, material.diffuse_map.id);
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_2D, material.specular_map.id);
+		glActiveTexture(GL_TEXTURE2);
+		glBindTexture(GL_TEXTURE_2D, material.normal_map.id);
+		shader.SetInt("material.diffuse", 0);
+		shader.SetInt("material.specular", 1);
+		shader.SetInt("material.normal", 2);
+		shader.SetFloat("material.shininess", material.shininess);
+		shader.SetVec3("material.diffuse_coeff", material.diffuse_coefficient);
+		shader.SetVec3("material.specular_coeff", material.specular_coefficient);
+		static_assert(std::is_same_v<std::uint32_t, std::underlying_type<PhongMaterialFlags>::type>);
+		shader.SetUint("material.flags", (std::uint32_t)material.flags);
+		glDrawElements(GL_TRIANGLES, mesh.indices_end - mesh.indices_begin + 1, GL_UNSIGNED_INT, (void*)(mesh.indices_begin * sizeof(GLuint)));
 	}
 }
 
-void AnimatedModel::LoadAnimatedModel(const std::string& path)
+void AnimatedModel::LoadAnimatedModel(const std::string& directory)
 {
-	std::string directory = path.substr(0, path.find_last_of("/\\"));
-	
-	std::ifstream model_file_stream(path, std::ios::binary);
+	namespace fs = std::filesystem;
+
+	const auto path = fs::path(directory);
+	assert(fs::is_directory(path));
+	fs::path model_file_path, skeleton_file_path;
+	std::vector<fs::path> animation_file_paths;
+	for (const auto& dir_entry : fs::directory_iterator(path))
+	{
+		auto extension = dir_entry.path().extension();
+		if (extension == ".model")
+		{
+			assert(model_file_path.empty());
+			model_file_path = dir_entry.path();
+		}
+		else if (extension == ".skeleton")
+		{
+			assert(skeleton_file_path.empty());
+			skeleton_file_path = dir_entry.path();
+		}
+		else if (extension == ".animation")
+		{
+			animation_file_paths.push_back(dir_entry.path());
+		}
+		else
+		{
+			std::cout << "Warning: unsupported file format: '" << extension << "'\n";
+		}
+	}
+
+	assert(!model_file_path.empty() && !skeleton_file_path.empty());
+
+	std::ifstream model_file_stream(model_file_path, std::ios::binary);
 
 	ModelFile model_file_data;
 	model_file_stream.read((char*)&model_file_data.header, sizeof(model_file_data.header));
@@ -145,12 +189,17 @@ void AnimatedModel::LoadAnimatedModel(const std::string& path)
 		model_file_stream.read((char*)&material.diffuse_coefficient, sizeof(material.diffuse_coefficient));
 		model_file_stream.read((char*)&material.specular_coefficient, sizeof(material.specular_coefficient));
 		model_file_stream.read((char*)&material.shininess, sizeof(material.shininess));
+		model_file_stream.read((char*)&material.flags, sizeof(material.flags));
 		std::string diffusemap_filename; std::getline(model_file_stream, diffusemap_filename, '\0');
 		std::string specularmap_filename; std::getline(model_file_stream, specularmap_filename, '\0');
 		std::string normalmap_filename; std::getline(model_file_stream, normalmap_filename, '\0');
-		material.diffuse_map.id = LoadTexture(diffusemap_filename.c_str(), directory);
-		material.specular_map.id = LoadTexture(specularmap_filename.c_str(), directory);
-		material.normal_map.id = LoadTexture(normalmap_filename.c_str(), directory);
+		if (!diffusemap_filename.empty()) material.diffuse_map.id = LoadTexture(diffusemap_filename.c_str(), directory);
+		else material.diffuse_map.id = White1x1Texture();
+		if (!specularmap_filename.empty()) material.specular_map.id = LoadTexture(specularmap_filename.c_str(), directory);
+		else material.specular_map.id = White1x1Texture();
+		// TODO: handle missing normal map
+		if (!normalmap_filename.empty()) material.normal_map.id = LoadTexture(normalmap_filename.c_str(), directory);
+		else material.normal_map.id = Blue1x1Texture();
 	}
 
 	std::copy(model_file_data.meshes.get(), model_file_data.meshes.get() + model_file_data.header.num_meshes, std::back_inserter(this->meshes));
@@ -213,7 +262,7 @@ void AnimatedModel::LoadAnimatedModel(const std::string& path)
 		attribute_index++;
 	}
 
-	std::ifstream skeleton_file_stream(directory + "/Warrok.skeleton", std::ios::binary);
+	std::ifstream skeleton_file_stream(skeleton_file_path, std::ios::binary);
 	SkeletonFile skeleton_file_data;
 	skeleton_file_stream.read((char*)&skeleton_file_data.header, sizeof(skeleton_file_data.header));
 	assert(skeleton_file_data.header.magic_number == 'ntks');
@@ -229,22 +278,33 @@ void AnimatedModel::LoadAnimatedModel(const std::string& path)
 	std::copy(skeleton_file_data.joints.get(), skeleton_file_data.joints.get() + skeleton_file_data.header.num_joints, std::back_inserter(this->skeleton.joints));
 	std::copy(skeleton_file_data.joint_names.get(), skeleton_file_data.joint_names.get() + skeleton_file_data.header.num_joints, std::back_inserter(this->skeleton.joint_names));
 
-	std::ifstream animation_file_stream(directory + "/sitting_laughing.animation", std::ios::binary);
-	AnimationClipFile::Header clip_file_header;
-	animation_file_stream.read((char*)&clip_file_header, sizeof(clip_file_header));
-	clip.frames_per_second = clip_file_header.frames_per_second;
-	clip.frame_count = clip_file_header.frame_count;
-	clip.loops = clip_file_header.loops;
-	const auto num_poses = clip_file_header.frame_count + (clip_file_header.loops ? 0 : 1);
-	clip.poses.resize(num_poses);
-	const auto pose_size_bytes = skeleton.joints.size() * sizeof(JointPose);
-	for (auto& skeleton_pose : clip.poses)
+	auto AddAnimation = [&clips = this->clips](const fs::path& path, int num_skeleton_joints)
 	{
-		skeleton_pose.joint_poses.resize(skeleton.joints.size());
-		animation_file_stream.read((char*)skeleton_pose.joint_poses.data(), pose_size_bytes);
-		// TODO: fix this temporary fix
-		for (auto& pose : skeleton_pose.joint_poses) {
-			pose.rotation = glm::quat(pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w);
+		std::ifstream animation_file_stream(path, std::ios::binary);
+		AnimationClipFile::Header clip_file_header;
+		animation_file_stream.read((char*)&clip_file_header, sizeof(clip_file_header));
+		clips.emplace_back();
+		auto& new_clip = clips.back();
+		new_clip.frames_per_second = clip_file_header.frames_per_second;
+		new_clip.frame_count = clip_file_header.frame_count;
+		new_clip.loops = clip_file_header.loops;
+		new_clip.name = path.stem().string();
+		const auto num_poses = clip_file_header.frame_count + (clip_file_header.loops ? 0 : 1);
+		new_clip.poses.resize(num_poses);
+		const auto pose_size_bytes = num_skeleton_joints * sizeof(JointPose);
+		for (auto& skeleton_pose : new_clip.poses)
+		{
+			skeleton_pose.joint_poses.resize(num_skeleton_joints);
+			animation_file_stream.read((char*)skeleton_pose.joint_poses.data(), pose_size_bytes);
+			// TODO: fix this temporary fix
+			for (auto& pose : skeleton_pose.joint_poses) {
+				pose.rotation = glm::quat(pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w);
+			}
 		}
+	};
+
+	for (auto& animation_file_path : animation_file_paths)
+	{
+		AddAnimation(animation_file_path, (int)skeleton.joints.size());
 	}
 }

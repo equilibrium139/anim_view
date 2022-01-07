@@ -39,6 +39,8 @@ layout (std140) uniform Lights {
     int numSpotLights;
 };
 
+#define MATERIAL_FLAG_DIFFUSE_WITH_ALPHA 1u
+
 struct Material {
     sampler2D diffuse;  
     sampler2D specular;
@@ -46,6 +48,7 @@ struct Material {
     vec3 diffuse_coeff;
     vec3 specular_coeff;
     float shininess;
+    uint flags;
 };
 
 uniform Material material;
@@ -100,7 +103,20 @@ vec3 CalcDirLightContribution(DirectionalLight light, vec3 mat_ambient, vec3 mat
 
 void main()
 {
-    vec3 diffuse_texel = texture(material.diffuse, fs_in.texCoords).rgb;
+    vec3 diffuse_texel;
+    float alpha = 1.0;
+
+    if ((material.flags & MATERIAL_FLAG_DIFFUSE_WITH_ALPHA) != 0u)
+    {
+        vec4 diffuse_texel_with_alpha = texture(material.diffuse, fs_in.texCoords).rgba;
+        diffuse_texel = diffuse_texel_with_alpha.rgb;
+        alpha = diffuse_texel_with_alpha.a;
+    }
+    else
+    {
+        diffuse_texel = texture(material.diffuse, fs_in.texCoords).rgb;
+    }
+
     vec3 specular_texel = texture(material.specular, fs_in.texCoords).rgb;
     vec3 mat_diffuse = material.diffuse_coeff * diffuse_texel;
     vec3 mat_ambient = vec3(0.2, 0.2, 0.2) * mat_diffuse;
@@ -120,5 +136,5 @@ void main()
 
     finalColor += CalcDirLightContribution(dirLight, mat_ambient, mat_diffuse, mat_specular, normal, fs_in.fragViewPos);
 
-    color = vec4(finalColor, 1.0);
+    color = vec4(finalColor, alpha);
 }
