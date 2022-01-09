@@ -128,6 +128,7 @@ struct AnimatedModel
 	std::vector<PhongMaterial> materials;
 	Skeleton skeleton;
 	std::vector<AnimationClip> clips;
+	std::string name;
 	int current_clip = 0;
 	AnimationClip& CurrentClip() { return clips[current_clip]; }
 	AnimatedModel(const std::string& directory);

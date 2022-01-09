@@ -52,6 +52,7 @@ void AnimatedModel::Draw(Shader& shader, float dt)
 
 	glm::mat4 local_mat = glm::identity<glm::mat4>();
 	if (apply_root_motion) local_mat = glm::translate(local_mat, pose.joint_poses[0].translation);
+	else local_mat = glm::translate(local_mat, glm::vec3(pose.joint_poses[0].translation.x, pose.joint_poses[0].translation.y, 0));
 	local_mat *= glm::mat4_cast(pose.joint_poses[0].rotation);
 	local_mat = glm::scale(local_mat, pose.joint_poses[0].scale);
 
@@ -108,26 +109,6 @@ void AnimatedModel::Draw(Shader& shader, float dt)
 		shader.SetUint("material.flags", (std::uint32_t)material.flags);
 		glDrawElements(GL_TRIANGLES, mesh.indices_end - mesh.indices_begin + 1, GL_UNSIGNED_INT, (void*)(mesh.indices_begin * sizeof(GLuint)));
 	}
-
-	for (auto& mesh : meshes)
-	{
-		auto& material = materials[mesh.material_index];
-		glActiveTexture(GL_TEXTURE0);
-		glBindTexture(GL_TEXTURE_2D, material.diffuse_map.id);
-		glActiveTexture(GL_TEXTURE1);
-		glBindTexture(GL_TEXTURE_2D, material.specular_map.id);
-		glActiveTexture(GL_TEXTURE2);
-		glBindTexture(GL_TEXTURE_2D, material.normal_map.id);
-		shader.SetInt("material.diffuse", 0);
-		shader.SetInt("material.specular", 1);
-		shader.SetInt("material.normal", 2);
-		shader.SetFloat("material.shininess", material.shininess);
-		shader.SetVec3("material.diffuse_coeff", material.diffuse_coefficient);
-		shader.SetVec3("material.specular_coeff", material.specular_coefficient);
-		static_assert(std::is_same_v<std::uint32_t, std::underlying_type<PhongMaterialFlags>::type>);
-		shader.SetUint("material.flags", (std::uint32_t)material.flags);
-		glDrawElements(GL_TRIANGLES, mesh.indices_end - mesh.indices_begin + 1, GL_UNSIGNED_INT, (void*)(mesh.indices_begin * sizeof(GLuint)));
-	}
 }
 
 void AnimatedModel::LoadAnimatedModel(const std::string& directory)
@@ -163,6 +144,8 @@ void AnimatedModel::LoadAnimatedModel(const std::string& directory)
 
 	assert(!model_file_path.empty() && !skeleton_file_path.empty());
 
+	this->name = model_file_path.stem().string();
+
 	std::ifstream model_file_stream(model_file_path, std::ios::binary);
 
 	ModelFile model_file_data;
@@ -197,7 +180,6 @@ void AnimatedModel::LoadAnimatedModel(const std::string& directory)
 		else material.diffuse_map.id = White1x1Texture();
 		if (!specularmap_filename.empty()) material.specular_map.id = LoadTexture(specularmap_filename.c_str(), directory);
 		else material.specular_map.id = White1x1Texture();
-		// TODO: handle missing normal map
 		if (!normalmap_filename.empty()) material.normal_map.id = LoadTexture(normalmap_filename.c_str(), directory);
 		else material.normal_map.id = Blue1x1Texture();
 	}
@@ -296,7 +278,10 @@ void AnimatedModel::LoadAnimatedModel(const std::string& directory)
 		{
 			skeleton_pose.joint_poses.resize(num_skeleton_joints);
 			animation_file_stream.read((char*)skeleton_pose.joint_poses.data(), pose_size_bytes);
-			// TODO: fix this temporary fix
+
+			// Quaternions are stored in the file in the order w, x, y, z. GLM stores them in the order
+			// x, y, z, w even though the glm::quat constructor takes them in the order w, x, y, z. This is fixing
+			// that ordering issue
 			for (auto& pose : skeleton_pose.joint_poses) {
 				pose.rotation = glm::quat(pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w);
 			}

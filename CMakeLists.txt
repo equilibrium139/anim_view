@@ -9,6 +9,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_executable(anim_view src/main.cpp
                          src/AnimatedModel.cpp
                          src/AnimatedModel.h
+                         src/AssetLoader.cpp
+                         src/AssetLoader.h
                          src/Camera.h
                          src/Light.h
                          src/Material.h
