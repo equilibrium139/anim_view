@@ -216,7 +216,7 @@ int main(int, char**)
             static int current_model_idx = 0;
             const char* combo_preview_value = model_names[current_model_idx];  // Pass in the preview value visible before opening the combo (it could be anything)
             model = &models[current_model_idx];
-            if (ImGui::BeginCombo("Model", combo_preview_value, flags))
+            if (ImGui::BeginCombo("ModelFile", combo_preview_value, flags))
             {
                 for (int n = 0; n < num_models; n++)
                 {
@@ -276,7 +276,7 @@ int main(int, char**)
                 model->paused = true;
             }
             ImGui::ProgressBar(model->clip_time / (clip.frame_count / clip.frames_per_second));
-            ImGui::InputFloat("Model y", &model_y);
+            ImGui::InputFloat("ModelFile y", &model_y);
             ImGui::Checkbox("Apply root motion", &model->apply_root_motion);
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
 
