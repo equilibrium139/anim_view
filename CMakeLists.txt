@@ -9,9 +9,16 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_executable(anim_view src/main.cpp
                          src/AnimatedModel.cpp
                          src/AnimatedModel.h
+			 src/ClipPickScene.cpp
+			 src/ClipPickScene.h
                          src/Camera.h
+			 src/Input.h
                          src/Light.h
                          src/Material.h
+			 src/PoseEditScene.cpp
+			 src/PoseEditScene.h
+			 src/Scene.cpp
+			 src/Scene.h
                          src/Shader.cpp
                          src/Shader.h
                          src/stb_image.cpp
@@ -35,7 +42,7 @@ target_link_libraries(anim_view PRIVATE glfw
 )
 
 if(MSVC)
-  target_compile_options(anim_view PRIVATE /W4)
+  target_compile_options(anim_view PRIVATE /W4 /wd4201) 
 else()
   target_compile_options(anim_view PRIVATE -Wall -Wextra -pedantic)
 endif()

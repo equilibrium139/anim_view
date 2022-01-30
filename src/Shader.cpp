@@ -1,6 +1,6 @@
 #include "Shader.h"
 
-Shader::Shader(const char * vertexPath, const char * fragmentPath, const char * geometryPath)
+Shader::Shader(const char * vertexPath, const char * fragmentPath, const char * geometryPath, const std::vector<UniformBlockBinding>& ub_bindings)
 {
 	unsigned int vertexShader = glCreateShader(GL_VERTEX_SHADER);
 	unsigned int fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
@@ -66,18 +66,18 @@ Shader::Shader(const char * vertexPath, const char * fragmentPath, const char * 
 
 	glDeleteShader(vertexShader);
 	glDeleteShader(fragmentShader);
+
+	use();
+	for (const auto& binding : ub_bindings)
+	{
+		auto block_index = glGetUniformBlockIndex(id, binding.uniform_block_name.c_str());
+		glUniformBlockBinding(id, block_index, binding.uniform_block_binding);
+	}
 }
 
 void Shader::use()
 {
 	glUseProgram(id);
-}
-
-bool Shader::used() const
-{
-	GLint currentProgram;
-	glGetIntegerv(GL_CURRENT_PROGRAM, &currentProgram);
-	return id == currentProgram;
 }
 
 void Shader::SetBool(const char * name, bool value) const
@@ -108,6 +108,18 @@ void Shader::SetMat4(const char * name, const float * value)
 {
 	int uniformLocation = glGetUniformLocation(id, name);
 	glUniformMatrix4fv(uniformLocation, 1, GL_FALSE, value);
+}
+
+void Shader::SetMat4(const char* name, const float* value, int count)
+{
+	int uniformLocation = glGetUniformLocation(id, name);
+	glUniformMatrix4fv(uniformLocation, count, GL_FALSE, value);
+}
+
+void Shader::SetMat3(const char* name, const float* value)
+{
+	int uniformLocation = glGetUniformLocation(id, name);
+	glUniformMatrix3fv(uniformLocation, 1, GL_FALSE, value);
 }
 
 void Shader::SetVec3(const char * name, float x, float y, float z)
@@ -155,7 +167,7 @@ std::string Shader::get_file_contents(const char * path)
 	}
 	else
 	{
-		std::cout << "ERROR::SHADER::FILE_NOT_SUCCESSFULLY_READ\n";
+		std::cout << "ERROR::SHADER::FILE_NOT_SUCCESSFULLY_READ: '" << path << "'\n";
 		return {};
 	}
 }

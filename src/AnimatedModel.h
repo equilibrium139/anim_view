@@ -1,13 +1,13 @@
 #ifndef ANIMATED_MODEL_H
 #define ANIMATED_MODEL_H
 
-#include <array>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include "Material.h"
 #include "Shader.h"
 #include <string>
 #include <memory>
+#include <vector>
 
 struct Mesh
 {
@@ -49,6 +49,12 @@ struct AnimationClip
 	unsigned int frame_count;
 	bool loops;
 };
+
+std::vector<glm::mat4> ComputeGlobalMatrices(const SkeletonPose& pose, const Skeleton& skeleton, bool apply_root_motion = true);
+std::vector<glm::mat4> ComputeGlobalMatrices(const AnimationClip& clip, const Skeleton& skeleton, float time, bool apply_root_motion = true);
+std::vector<glm::mat4> ComputeSkinningMatrices(const AnimationClip& clip, const Skeleton& skeleton, float time, bool apply_root_motion = true);
+std::vector<glm::mat4> ComputeSkinningMatrices(const SkeletonPose& pose, const Skeleton& skeleton, bool apply_root_motion = true);
+SkeletonPose ComputeLocalMatrices(const std::vector<glm::mat4>& global_matrices, const Skeleton& skeleton);
 
 enum class VertexFlags : std::uint32_t
 {
@@ -129,17 +135,13 @@ struct AnimatedModel
 	Skeleton skeleton;
 	std::vector<AnimationClip> clips;
 	std::string name;
-	int current_clip = 0;
-	AnimationClip& CurrentClip() { return clips[current_clip]; }
 	AnimatedModel(const std::string& directory);
-	void Draw(Shader& shader, float dt);
-	float clip_speed = 1.0f;
-	float clip_time = 0.0f;
-	bool paused = false;
-	bool apply_root_motion = true;
+	//void Draw() const;
+	void BindGeometry() const { glBindVertexArray(VAO); }
 private:
 	void LoadAnimatedModel(const std::string& path);
 	unsigned int VAO, VBO, EBO;
+	Shader* shader;
 };
 
 #endif // !ANIMATED_MODEL_H

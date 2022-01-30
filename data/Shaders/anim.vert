@@ -13,7 +13,7 @@ layout (std140) uniform Matrices{
     mat4 view;
 };
 
-uniform mat4 skinning_matrices[100];
+uniform mat4 skinning_matrices[128];
 
 uniform mat4 model;
 uniform mat3 normalMatrix;

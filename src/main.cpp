@@ -13,29 +13,24 @@
 #include <filesystem>
 #include "AnimatedModel.h"
 #include "Camera.h"
+#include "ClipPickScene.h"
+#include "Input.h"
 #include "Light.h"
+#include "PoseEditScene.h"  
+#include "Scene.h"
 #include "Shader.h"
 
+
+// TODO: remove these globals
 int windowWidth = 1200;
 int windowHeight = 800;
-
-struct Input
-{
-    float mouse_x;
-    float mouse_y;
-    float mouse_delta_x;
-    float mouse_delta_y;
-
-    bool w_pressed, a_pressed, s_pressed, d_pressed;
-    bool left_mouse_pressed;
-};
  
 static void GLFWErrorCallback(int error, const char* description)
 {
     std::cerr << "Glfw Error " << error << ": " << description << '\n';
 }
 
-void FramebufferSizeCallback(GLFWwindow* window, int width, int height)
+void FramebufferSizeCallback(GLFWwindow*, int width, int height)
 {
     glViewport(0, 0, width, height);
     windowWidth = width;
@@ -45,12 +40,15 @@ void FramebufferSizeCallback(GLFWwindow* window, int width, int height)
 void ProcessInput(GLFWwindow* window, Input& out_input, const ImGuiIO& io)
 {
     static bool first_poll = true;
+
     auto prev_mouse_x = out_input.mouse_x;
     auto prev_mouse_y = out_input.mouse_y;
     double current_mouse_x, current_mouse_y;
     glfwGetCursorPos(window, &current_mouse_x, &current_mouse_y);
     out_input.mouse_x = (float)current_mouse_x;
     out_input.mouse_y = (float)current_mouse_y;
+
+    glfwGetWindowSize(window, &out_input.window_width, &out_input.window_height);
 
     if (first_poll)
     {
@@ -166,155 +164,50 @@ int main(int, char**)
         models.emplace_back(dir_entry.path().string());
     }
 
-    Camera camera({ 0.0f, 1.5f, 5.0f });
-
-    Shader shader("Shaders/anim.vert", "Shaders/anim.frag");
-    shader.use();
-    GLuint shaderBlockIndex = glGetUniformBlockIndex(shader.id, "Matrices");
-    glUniformBlockBinding(shader.id, shaderBlockIndex, 0);
-    GLuint shaderLightsBlockIndex = glGetUniformBlockIndex(shader.id, "Lights");
-    glUniformBlockBinding(shader.id, shaderLightsBlockIndex, 1);
-
     float deltaTime = 0.0f;
     float lastFrameTime = 0.0f;
 
     Input input{};
 
+    Shader model_shader{ "Shaders/anim.vert", "Shaders/anim.frag", nullptr, 
+        {
+            {
+                .uniform_block_name = "Matrices",
+                .uniform_block_binding = 0
+            },
+            {
+                .uniform_block_name = "Lights",
+                .uniform_block_binding = 1
+            }
+        }
+    };
+
+    std::unique_ptr<Scene> scene = std::make_unique<PoseEditScene>(models, projViewUBO, lightsUBO, model_shader);
+
     // Main loop
     while (!glfwWindowShouldClose(window))
     {
-        float currentTime = glfwGetTime();
+        float currentTime = (float)glfwGetTime();
         deltaTime = currentTime - lastFrameTime;
         lastFrameTime = currentTime;
 
         ProcessInput(window, input, io);
-
-        if (input.w_pressed) camera.ProcessKeyboard(CAM_FORWARD, deltaTime);
-        if (input.a_pressed) camera.ProcessKeyboard(CAM_LEFT, deltaTime);
-        if (input.s_pressed) camera.ProcessKeyboard(CAM_BACKWARD, deltaTime);
-        if (input.d_pressed) camera.ProcessKeyboard(CAM_RIGHT, deltaTime);
-
-        if (input.left_mouse_pressed) camera.ProcessMouseMovement(input.mouse_delta_x, input.mouse_delta_y);
 
         // Start the Dear ImGui frame
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        static float model_y = 0.0f;
-        AnimatedModel* model = nullptr;
-        {
-            static ImGuiComboFlags flags = 0;
-            static float f = 0.0f;
-            static int counter = 0;
-
-            ImGui::Begin("Animation Select");
-
-            const int num_models = (int)models.size();
-            auto model_names = std::make_unique<const char* []>(num_models);
-            for (int i = 0; i < num_models; i++) model_names[i] = models[i].name.c_str();
-            static int current_model_idx = 0;
-            const char* combo_preview_value = model_names[current_model_idx];  // Pass in the preview value visible before opening the combo (it could be anything)
-            model = &models[current_model_idx];
-            if (ImGui::BeginCombo("ModelFile", combo_preview_value, flags))
-            {
-                for (int n = 0; n < num_models; n++)
-                {
-                    const bool is_selected = (current_model_idx == n);
-                    if (ImGui::Selectable(model_names[n], is_selected))
-                    {
-                        if (current_model_idx != n)
-                        {
-                            model->current_clip = n;
-                            model->clip_time = 0.0f;
-                        }
-                        current_model_idx = n;
-                    }
-
-                    // Set the initial focus when opening the combo (scrolling + keyboard navigation focus)
-                    if (is_selected)
-                    {
-                        ImGui::SetItemDefaultFocus();
-                    }
-                }
-                ImGui::EndCombo();
-            }
-
-            const int num_animations = (int)model->clips.size();
-            auto animation_names = std::make_unique<const char* []>(num_animations);
-            for (int i = 0; i < num_animations; i++) animation_names[i] = model->clips[i].name.c_str();
-            combo_preview_value = animation_names[model->current_clip];  // Pass in the preview value visible before opening the combo (it could be anything)
-            if (ImGui::BeginCombo("Animation", combo_preview_value, flags))
-            {
-                for (int n = 0; n < num_animations; n++)
-                {
-                    const bool is_selected = (model->current_clip == n);
-                    if (ImGui::Selectable(animation_names[n], is_selected))
-                    {
-                        if (model->current_clip != n)
-                        {
-                            model->current_clip = n;
-                            model->clip_time = 0.0f;
-                        }
-                        model->current_clip = n;
-                    }
-
-                    // Set the initial focus when opening the combo (scrolling + keyboard navigation focus)
-                    if (is_selected)
-                    {
-                        ImGui::SetItemDefaultFocus();
-                    }
-                }
-                ImGui::EndCombo();
-            }
-            ImGui::Checkbox("Pause", &model->paused);
-            ImGui::InputFloat("Speed", &model->clip_speed, 0.1f);
-            ImGui::Text("Clip time: %f", model->clip_time);
-            auto& clip = model->CurrentClip();
-            if (ImGui::SliderFloat("Clip time", &model->clip_time, 0.0f, clip.frame_count / clip.frames_per_second))
-            {
-                model->paused = true;
-            }
-            ImGui::ProgressBar(model->clip_time / (clip.frame_count / clip.frames_per_second));
-            ImGui::InputFloat("ModelFile y", &model_y);
-            ImGui::Checkbox("Apply root motion", &model->apply_root_motion);
-            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
-
-            ImGui::End();
-        }
-        
-        auto view = camera.GetViewMatrix();
-        auto aspect = (float)windowWidth / (float)windowHeight;
-        auto proj = camera.GetProjectionMatrix(aspect);
-
-        glBindBuffer(GL_UNIFORM_BUFFER, projViewUBO);
-        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(glm::mat4),
-            glm::value_ptr(proj));
-        glBufferSubData(GL_UNIFORM_BUFFER, sizeof(glm::mat4), sizeof(glm::mat4),
-            glm::value_ptr(view));
-
-        glm::mat4 model_to_world = glm::identity<glm::mat4>();
-        model_to_world = glm::translate(model_to_world, glm::vec3(0, 0, model_y));
-        model_to_world = glm::scale(model_to_world, glm::vec3(0.01f, 0.01f, 0.01f));
-        glm::mat3 normalMatrix = glm::transpose(glm::inverse(view * model_to_world));
-        shader.SetMat4("model", glm::value_ptr(model_to_world));
-        glUniformMatrix3fv(glGetUniformLocation(shader.id, "normalMatrix"), 1, GL_FALSE, glm::value_ptr(normalMatrix));
-
-        DirectionalLight dirLightViewSpace = DirectionalLight(glm::vec3(0.2f, 0.2f, 0.2f), glm::vec3(0.8, 0.8f, 0.8f), glm::vec3(1.0f, 1.0f, 1.0f), glm::vec3(0.0f, 0.0f, -1.0f));
-        int numLights[2] = { 0, 0 };
-        glBindBuffer(GL_UNIFORM_BUFFER, lightsUBO);
-        glBufferSubData(GL_UNIFORM_BUFFER, maxPointLights * sizeof(PointLight) + maxSpotLights * sizeof(SpotLight) + sizeof(DirectionalLight), sizeof(numLights), numLights);
-        glBufferSubData(GL_UNIFORM_BUFFER, maxPointLights * sizeof(PointLight) + maxSpotLights * sizeof(SpotLight), sizeof(DirectionalLight), &dirLightViewSpace);
-
         // Rendering
-        ImGui::Render();
         int display_w, display_h;
         glfwGetFramebufferSize(window, &display_w, &display_h);
         glViewport(0, 0, display_w, display_h);
         glClearColor(clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        model->Draw(shader, deltaTime);
+        scene->UpdateAndRender(input, deltaTime);
+
+        ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(window);

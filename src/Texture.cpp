@@ -5,6 +5,7 @@
 #include <glad/glad.h>
 #include <iostream>
 
+#include <cassert>
 #include <unordered_map>
 
 static std::unordered_map<std::string, unsigned int> textures;
@@ -26,6 +27,7 @@ static unsigned int TextureFromFile(const char* path)
 		else if (nrComponents == 4) format = GL_RGBA;
 		else {
 			std::cout << "TextureFromFile::Unsupported number of components: " << nrComponents << " from file " << path << '\n';
+			std::exit(1);
 		}
 
 		glBindTexture(GL_TEXTURE_2D, id);

@@ -8,9 +8,19 @@
 #include <glm/glm.hpp>
 #include "stb_image.h"
 
+#include <glm/ext/matrix_relational.hpp>
+
 AnimatedModel::AnimatedModel(const std::string& directory)
 {
 	LoadAnimatedModel(directory);
+
+	// Render opaque meshes before transparent ones
+	std::partition(meshes.begin(), meshes.end(),
+		[&materials = this->materials](const Mesh& mesh)
+	{
+		auto& material = materials[mesh.material_index];
+		return !material.HasFlag(PhongMaterialFlags::DIFFUSE_WITH_ALPHA);
+	});
 }
 
 static inline glm::vec3 Lerp(const glm::vec3& a, const glm::vec3& b, float t)
@@ -34,81 +44,6 @@ static SkeletonPose Interpolate(const SkeletonPose& a, const SkeletonPose& b, fl
 		interpolated_joint_pose.rotation = glm::slerp(a_pose.rotation, b_pose.rotation, t);
 	}
 	return interpolated;
-}
-
-void AnimatedModel::Draw(Shader& shader, float dt)
-{
-	if (!paused) clip_time += (dt * clip_speed);
-	auto clip = &clips[current_clip];
-	const float clip_duration = clip->frame_count / clip->frames_per_second;
-	clip_time = std::fmod(clip_time, clip_duration);
-	if (clip_time < 0) clip_time = clip_duration + clip_time;
-	//if (clip_time < 0) clip_time = clip_duration + clip_time;
-	float pose_index = clip_time * clip->frames_per_second;
-	auto a = std::floor(pose_index);
-	auto b = a + 1;
-	auto pose = Interpolate(clip->poses[a], clip->poses[b], pose_index - a);
-	//auto& pose = clip.poses[pose_index];
-
-	glm::mat4 local_mat = glm::identity<glm::mat4>();
-	if (apply_root_motion) local_mat = glm::translate(local_mat, pose.joint_poses[0].translation);
-	else local_mat = glm::translate(local_mat, glm::vec3(pose.joint_poses[0].translation.x, pose.joint_poses[0].translation.y, 0));
-	local_mat *= glm::mat4_cast(pose.joint_poses[0].rotation);
-	local_mat = glm::scale(local_mat, pose.joint_poses[0].scale);
-
-	std::vector<glm::mat4> global_joint_poses(pose.joint_poses.size());
-	global_joint_poses[0] = local_mat;
-
-	for (int i = 1; i < global_joint_poses.size(); i++)
-	{
-		auto& joint = skeleton.joints[i];
-		auto& parent_global = global_joint_poses[joint.parent];
-
-		local_mat = glm::identity<glm::mat4>();
-		local_mat = glm::translate(local_mat, pose.joint_poses[i].translation);
-		local_mat *= glm::mat4_cast(pose.joint_poses[i].rotation);
-		local_mat = glm::scale(local_mat, pose.joint_poses[i].scale);
-		global_joint_poses[i] = parent_global * local_mat;
-	}
-	
-	std::vector<glm::mat4> skinning_matrices(global_joint_poses.size());
-	for (int i = 0; i < global_joint_poses.size(); i++)
-	{
-		skinning_matrices[i] = global_joint_poses[i] * glm::mat4(skeleton.joints[i].local_to_joint);
-	}
-
-	shader.use();
-	glUniformMatrix4fv(glGetUniformLocation(shader.id, "skinning_matrices"), (GLsizei)skinning_matrices.size(), GL_FALSE, glm::value_ptr(skinning_matrices[0]));
-
-	glBindVertexArray(VAO);
-
-	// Render opaque meshes before transparent ones
-	std::partition(meshes.begin(), meshes.end(),
-		[&materials = this->materials](const Mesh& mesh)
-		{
-			auto& material = materials[mesh.material_index];
-			return !material.HasFlag(PhongMaterialFlags::DIFFUSE_WITH_ALPHA);
-		});
-
-	for (auto& mesh : meshes)
-	{
-		auto& material = materials[mesh.material_index];
-		glActiveTexture(GL_TEXTURE0);
-		glBindTexture(GL_TEXTURE_2D, material.diffuse_map.id);
-		glActiveTexture(GL_TEXTURE1);
-		glBindTexture(GL_TEXTURE_2D, material.specular_map.id);
-		glActiveTexture(GL_TEXTURE2);
-		glBindTexture(GL_TEXTURE_2D, material.normal_map.id);
-		shader.SetInt("material.diffuse", 0);
-		shader.SetInt("material.specular", 1);
-		shader.SetInt("material.normal", 2);
-		shader.SetFloat("material.shininess", material.shininess);
-		shader.SetVec3("material.diffuse_coeff", material.diffuse_coefficient);
-		shader.SetVec3("material.specular_coeff", material.specular_coefficient);
-		static_assert(std::is_same_v<std::uint32_t, std::underlying_type<PhongMaterialFlags>::type>);
-		shader.SetUint("material.flags", (std::uint32_t)material.flags);
-		glDrawElements(GL_TRIANGLES, mesh.indices_end - mesh.indices_begin + 1, GL_UNSIGNED_INT, (void*)(mesh.indices_begin * sizeof(GLuint)));
-	}
 }
 
 void AnimatedModel::LoadAnimatedModel(const std::string& directory)
@@ -136,7 +71,7 @@ void AnimatedModel::LoadAnimatedModel(const std::string& directory)
 		{
 			animation_file_paths.push_back(dir_entry.path());
 		}
-		else
+		else if (extension != ".png" && extension != ".jpg")
 		{
 			std::cout << "Warning: unsupported file format: '" << extension << "'\n";
 		}
@@ -198,7 +133,7 @@ void AnimatedModel::LoadAnimatedModel(const std::string& directory)
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
 	glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(unsigned int) * model_file_data.header.num_indices, model_file_data.indices.get(), GL_STATIC_DRAW);
 
-	char* offset = 0;
+	const char* offset = 0;
 	std::uint32_t attribute_index = 0;
 
 	// default vertex data- every vertex buffer has at least position normal uv
@@ -292,4 +227,96 @@ void AnimatedModel::LoadAnimatedModel(const std::string& directory)
 	{
 		AddAnimation(animation_file_path, (int)skeleton.joints.size());
 	}
+}
+
+std::vector<glm::mat4> ComputeGlobalMatrices(const SkeletonPose& pose, const Skeleton& skeleton, bool apply_root_motion)
+{
+	assert(pose.joint_poses.size() == skeleton.joints.size());
+
+	glm::mat4 local_mat = glm::identity<glm::mat4>();
+	if (apply_root_motion) local_mat = glm::translate(local_mat, pose.joint_poses[0].translation);
+	else local_mat = glm::translate(local_mat, glm::vec3(pose.joint_poses[0].translation.x, pose.joint_poses[0].translation.y, 0));
+	local_mat *= glm::mat4_cast(pose.joint_poses[0].rotation);
+	local_mat = glm::scale(local_mat, pose.joint_poses[0].scale);
+
+	std::vector<glm::mat4> global_joint_poses(pose.joint_poses.size());
+	global_joint_poses[0] = local_mat;
+
+	for (int i = 1; i < global_joint_poses.size(); i++)
+	{
+		auto& joint = skeleton.joints[i];
+		auto& parent_global = global_joint_poses[joint.parent];
+
+		local_mat = glm::identity<glm::mat4>();
+		local_mat = glm::translate(local_mat, pose.joint_poses[i].translation);
+		local_mat *= glm::mat4_cast(pose.joint_poses[i].rotation);
+		local_mat = glm::scale(local_mat, pose.joint_poses[i].scale);
+		global_joint_poses[i] = parent_global * local_mat;
+	}
+
+	return global_joint_poses;
+}
+
+std::vector<glm::mat4> ComputeGlobalMatrices(const AnimationClip& clip, const Skeleton& skeleton, float clip_time, bool apply_root_motion)
+{
+	float pose_index = clip_time * clip.frames_per_second;
+	auto a = (int)std::floor(pose_index);
+	auto b = a + 1;
+	auto pose = Interpolate(clip.poses[a], clip.poses[b], pose_index - a);
+
+	return ComputeGlobalMatrices(pose, skeleton, apply_root_motion);
+}
+
+std::vector<glm::mat4> ComputeSkinningMatrices(const AnimationClip& clip, const Skeleton& skeleton, float clip_time, bool apply_root_motion)
+{
+	auto global_joint_poses = ComputeGlobalMatrices(clip, skeleton, clip_time, apply_root_motion);
+
+	std::vector<glm::mat4> skinning_matrices(global_joint_poses.size());
+	for (int i = 0; i < global_joint_poses.size(); i++)
+	{
+		skinning_matrices[i] = global_joint_poses[i] * glm::mat4(skeleton.joints[i].local_to_joint);
+	}
+
+	return skinning_matrices;
+}
+
+std::vector<glm::mat4> ComputeSkinningMatrices(const SkeletonPose& pose, const Skeleton& skeleton, bool apply_root_motion)
+{
+	auto global_joint_poses = ComputeGlobalMatrices(pose, skeleton, apply_root_motion);
+
+	std::vector<glm::mat4> skinning_matrices(global_joint_poses.size());
+	for (int i = 0; i < global_joint_poses.size(); i++)
+	{
+		skinning_matrices[i] = global_joint_poses[i] * glm::mat4(skeleton.joints[i].local_to_joint);
+	}
+
+	return skinning_matrices;
+}
+
+static JointPose ToJointPose(const glm::mat4& mat)
+{
+	JointPose pose;
+	pose.rotation = glm::quat(mat);
+	pose.translation = mat[3];
+	pose.scale = { mat[0][0], mat[1][1], mat[2][2] };
+	return pose;
+}
+
+SkeletonPose ComputeLocalMatrices(const std::vector<glm::mat4>& global_matrices, const Skeleton& skeleton)
+{
+	SkeletonPose pose;
+	auto num_joints = global_matrices.size();
+	pose.joint_poses.resize(num_joints);
+
+	pose.joint_poses[0] = ToJointPose(global_matrices[0]);
+
+	for (int i = 1; i < num_joints; i++)
+	{
+		auto parent_index = skeleton.joints[i].parent;
+		auto parent_global_inverse = glm::inverse(global_matrices[parent_index]);
+		auto local_mat = parent_global_inverse * global_matrices[i];
+		pose.joint_poses[i] = ToJointPose(local_mat);
+	}
+
+	return pose;
 }

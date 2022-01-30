@@ -45,7 +45,7 @@ struct PhongMaterial
 	Texture specular_map;
 	Texture normal_map;
 
-    inline bool HasFlag(PhongMaterialFlags flag)
+    inline bool HasFlag(PhongMaterialFlags flag) const
     {
         return (std::underlying_type_t<PhongMaterialFlags>)(flags & flag) != 0;
     }
